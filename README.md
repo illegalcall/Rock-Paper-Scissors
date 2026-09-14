@@ -57,3 +57,14 @@ For Parity's security disclosure process and Bug Bounty program, see
 
 Licensed under the [GNU General Public License v3.0 or later](./LICENSE) (GPL-3.0-or-later).
 
+
+## Host access and validation
+
+Both network variants require a Polkadot host. Player history is read through
+host preimage subscriptions and checked against its raw BLAKE2b-256 CID; no
+public IPFS gateway is used. A failed history read stops saving a new result so
+existing history is preserved. An empty CID starts a first-time history.
+
+Run `npm test` and `npm run build` for local validation. Repeat with
+`VITE_NETWORK=devnet` for the opt-in devnet build. These isolated tests and builds
+do not establish live contract deployment or Desktop gameplay acceptance.

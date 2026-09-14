@@ -5,7 +5,7 @@ import type { Move, Round, GameData, PlayerData, RoundResult } from "../types.ts
 import {
     determineWinner, pointsForResult,
     uploadToBulletin, ensureMapping, getContract, withTimeout,
-    IPFS_GATEWAY, short, asBytes20, unwrapResult,
+    readPlayerData, short, asBytes20, unwrapResult,
 } from "../utils.ts";
 
 const MOVE_EMOJI: Record<Move, string> = { rock: "✊", paper: "✋", scissors: "✂️" };
@@ -244,13 +244,8 @@ export default function MultiplayerGame({ account, roomCode, onDone }: {
             let playerData: PlayerData = {
                 player: myId, totalGames: 0, wins: 0, losses: 0, draws: 0, points: 0, games: [],
             };
-            try {
-                const cidRes = await lb.getPlayerCid.query(asBytes20(myId));
-                if (cidRes.success && cidRes.value) {
-                    const resp = await fetch(IPFS_GATEWAY + cidRes.value);
-                    if (resp.ok) playerData = await resp.json();
-                }
-            } catch { /* first time */ }
+            const existing = await readPlayerData(() => lb.getPlayerCid.query(asBytes20(myId)));
+            if (existing) playerData = existing;
 
             const game: GameData = {
                 id: playerData.games.length + 1, mode: "multiplayer",

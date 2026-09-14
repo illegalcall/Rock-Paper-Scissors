@@ -10,7 +10,8 @@
     "build:contracts": "cdm build",
     "deploy": "cdm deploy -n paseo --registry-address 0xf62c2ece29cd8df2e10040ecfa5a894a5c5d9cb0 --assethub-url wss://paseo-asset-hub-next-rpc.polkadot.io --bulletin-url wss://paseo-bulletin-next-rpc.polkadot.io",
     "deploy:devnet": "cdm deploy -n devnet",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@noble/hashes": "^2.2.0",
@@ -32,7 +33,8 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.2",
     "typescript": "^5.9.0",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "@polkadot-api/json-rpc-provider": "0.2.0"

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import {
     getPreimageManager,
     requestPermission,
+    type HostSubscription,
 } from "@parity/product-sdk-host";
 import {
     SignerManager,
@@ -20,7 +21,7 @@ import { blake2b } from "@noble/hashes/blake2.js";
 import { CID } from "multiformats/cid";
 import * as raw from "multiformats/codecs/raw";
 import type { MultihashDigest } from "multiformats/hashes/interface";
-import type { Move, RoundResult } from "./types.ts";
+import type { Move, RoundResult, PlayerData } from "./types.ts";
 
 /**
  * Unwrap a product-sdk `Result` to its value, re-throwing the `err` channel as
@@ -52,8 +53,6 @@ type AssetHubDescriptor = typeof devnet_asset_hub | typeof paseo_asset_hub;
 
 interface NetworkConfig {
     label: string;
-    /** IPFS gateways used to read Bulletin content, most specific first. */
-    gateways: readonly string[];
     /** CDM ContractRegistry address the leaderboard resolves against. */
     registry: string;
     loadDescriptor(): Promise<AssetHubDescriptor>;
@@ -68,24 +67,12 @@ export const NETWORK: NetworkConfig =
     import.meta.env.VITE_NETWORK === "devnet"
         ? {
               label: "Devnet (Paseo testnet)",
-              // Bulletin Paseo has no dedicated HTTP gateway; read via public IPFS gateways.
-              gateways: [
-                  "https://ipfs.io/ipfs/",
-                  "https://dweb.link/ipfs/",
-                  "https://nftstorage.link/ipfs/",
-              ],
               registry: "0x59b0245778917af55224e5f8fb55f7f8d452619f",
               loadDescriptor: async () =>
                   (await import("@parity/product-sdk-descriptors/devnet-asset-hub")).devnet_asset_hub,
           }
         : {
               label: "Paseo Next",
-              gateways: [
-                  "https://paseo-bulletin-next-ipfs.polkadot.io/ipfs/",
-                  "https://dweb.link/ipfs/",
-                  "https://ipfs.io/ipfs/",
-                  "https://nftstorage.link/ipfs/",
-              ],
               registry: "0xf62c2ece29cd8df2e10040ecfa5a894a5c5d9cb0",
               loadDescriptor: async () =>
                   (await import("@parity/product-sdk-descriptors/paseo-asset-hub")).paseo_asset_hub,
@@ -586,34 +573,74 @@ export async function ensureMapping(account: AppAccount): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Bulletin reads via public IPFS gateways
+// Bulletin reads through the host preimage subscription
 // ---------------------------------------------------------------------------
 
-const GATEWAYS = NETWORK.gateways;
-
-export const IPFS_GATEWAY = GATEWAYS[0];
-
-export async function fetchFromGateway(cid: string, timeoutMs = 30000): Promise<Uint8Array> {
-    const master = new AbortController();
-    const timer = setTimeout(() => master.abort(), timeoutMs);
-    try {
-        const winner = await Promise.any(
-            GATEWAYS.map(async gw => {
-                const resp = await fetch(gw + cid, { signal: master.signal });
-                if (!resp.ok) throw new Error(`${gw} -> ${resp.status}`);
-                return new Uint8Array(await resp.arrayBuffer());
-            }),
-        );
-        master.abort();
-        return winner;
-    } finally {
-        clearTimeout(timer);
+export async function fetchFromBulletin(cid: string, timeoutMs = 30000): Promise<Uint8Array> {
+    const parsed = CID.parse(cid);
+    // Survey uploads use raw blocks with a BLAKE2b-256 digest (calculateCID).
+    if (parsed.code !== raw.code || parsed.multihash.code !== BLAKE2B_256_CODE || parsed.multihash.size !== 32) {
+        throw new Error("Unsupported game CID: expected a raw BLAKE2b-256 block.");
     }
+    const key = `0x${Array.from(parsed.multihash.digest, byte => byte.toString(16).padStart(2, "0")).join("")}` as `0x${string}`;
+    const manager = await getPreimageManager();
+    if (!manager) throw new Error("Bulletin storage is unavailable — open this app inside a Polkadot host.");
+
+    return new Promise((resolve, reject) => {
+        let done = false;
+        let subscription: HostSubscription | undefined;
+        let removeInterrupt: (() => void) | undefined;
+        const cleanup = () => {
+            clearTimeout(timer);
+            removeInterrupt?.();
+            subscription?.unsubscribe();
+        };
+        const fail = (error: unknown) => {
+            if (done) return;
+            done = true;
+            cleanup();
+            reject(error);
+        };
+        const timer = setTimeout(() => fail(new Error("Bulletin read timed out")), timeoutMs);
+        try {
+            subscription = manager.lookup(key, (bytes) => {
+                if (done || bytes === null) return;
+                if (calculateCID(bytes) !== parsed.toString()) {
+                    fail(new Error("Bulletin content does not match the requested CID"));
+                    return;
+                }
+                done = true;
+                cleanup();
+                resolve(bytes);
+            });
+            removeInterrupt = subscription.onInterrupt(() => fail(new Error("Bulletin host connection interrupted")));
+            // A host may return its cached preimage synchronously during setup.
+            if (done) cleanup();
+        } catch (error) {
+            fail(error);
+        }
+    });
 }
 
 export async function fetchJsonFromBulletin<T = unknown>(cid: string): Promise<T> {
-    const bytes = await fetchFromGateway(cid);
+    const bytes = await fetchFromBulletin(cid);
     return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
+/** Only an explicitly empty CID starts a new history; read failures must abort saving. */
+export async function readPlayerData(
+    queryCid: () => Promise<{ success: boolean; value?: string }>,
+): Promise<PlayerData | null> {
+    const result = await queryCid();
+    if (!result.success) throw new Error("Unable to read the existing player history");
+    if (result.value === "") return null;
+    if (typeof result.value !== "string") throw new Error("Invalid player history CID response");
+    const data = await fetchJsonFromBulletin<PlayerData>(result.value);
+    if (!data || typeof data.player !== "string" || !Array.isArray(data.games) ||
+        ![data.totalGames, data.wins, data.losses, data.draws, data.points].every(Number.isFinite)) {
+        throw new Error("Invalid existing player history");
+    }
+    return data;
 }
 
 // ---------------------------------------------------------------------------

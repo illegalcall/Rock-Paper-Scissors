@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { AppAccount } from "../utils.ts";
-import { getContract, short, IPFS_GATEWAY, asBytes20 } from "../utils.ts";
+import { getContract, short, fetchJsonFromBulletin, asBytes20 } from "../utils.ts";
 import type { PlayerData, Move } from "../types.ts";
 
 const MOVE_EMOJI: Record<Move, string> = { rock: "✊", paper: "✋", scissors: "✂️" };
@@ -10,24 +10,32 @@ export default function MyProfile({ account }: {
 }) {
     const [data, setData] = useState<PlayerData | null>(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
+        setLoading(true);
+        setData(null);
+        setError(null);
         (async () => {
             try {
                 const lb = getContract();
                 if (!lb) { setLoading(false); return; }
 
                 const regRes = await lb.isRegistered.query(asBytes20(account));
-                if (!regRes.success || !regRes.value) {
+                if (!regRes.success) throw new Error("Unable to read player registration");
+                if (!regRes.value) {
                     setLoading(false);
                     return;
                 }
 
                 const cidRes = await lb.getPlayerCid.query(asBytes20(account));
-                if (!cidRes.success || !cidRes.value || cancelled) {
+                if (!cidRes.success) throw new Error("Unable to read player history");
+                if (cancelled) return;
+                if (!cidRes.value) {
                     const ptsRes = await lb.getPlayerPoints.query(asBytes20(account));
+                    if (!ptsRes.success) throw new Error("Unable to read player points");
                     if (!cancelled) {
                         setData({
                             player: account.h160Address,
@@ -40,11 +48,10 @@ export default function MyProfile({ account }: {
                     return;
                 }
 
-                const resp = await fetch(IPFS_GATEWAY + cidRes.value);
-                if (resp.ok && !cancelled) {
-                    setData(await resp.json());
-                }
+                const history = await fetchJsonFromBulletin<PlayerData>(cidRes.value);
+                if (!cancelled) setData(history);
             } catch (err) {
+                if (!cancelled) setError(err instanceof Error ? err.message : "Unable to load player history");
                 console.error("[Profile] Error:", err);
             } finally {
                 if (!cancelled) setLoading(false);
@@ -56,6 +63,8 @@ export default function MyProfile({ account }: {
     if (loading) {
         return <div className="profile-card"><div className="spinner">Loading profile...</div></div>;
     }
+
+    if (error) return <div className="empty" role="alert">{error}</div>;
 
     if (!data) {
         return (

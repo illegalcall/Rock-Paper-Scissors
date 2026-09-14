@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getContract, short, IPFS_GATEWAY, asBytes20 } from "../utils.ts";
+import { getContract, short, fetchJsonFromBulletin, asBytes20 } from "../utils.ts";
 import type { PlayerData, Move } from "../types.ts";
 
 const MOVE_EMOJI: Record<Move, string> = { rock: "✊", paper: "✋", scissors: "✂️" };
@@ -10,25 +10,30 @@ export default function PlayerHistory({ playerAddress, onBack }: {
 }) {
     const [data, setData] = useState<PlayerData | null>(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
+        setLoading(true);
+        setData(null);
+        setError(null);
         (async () => {
             try {
                 const lb = getContract();
                 if (!lb) return;
 
                 const cidRes = await lb.getPlayerCid.query(asBytes20(playerAddress));
-                if (!cidRes.success || !cidRes.value || cancelled) {
+                if (!cidRes.success) throw new Error("Unable to read player history");
+                if (cancelled) return;
+                if (!cidRes.value) {
                     setLoading(false);
                     return;
                 }
 
-                const resp = await fetch(IPFS_GATEWAY + cidRes.value);
-                if (resp.ok && !cancelled) {
-                    setData(await resp.json());
-                }
+                const history = await fetchJsonFromBulletin<PlayerData>(cidRes.value);
+                if (!cancelled) setData(history);
             } catch (err) {
+                if (!cancelled) setError(err instanceof Error ? err.message : "Unable to load player history");
                 console.error("Failed to load history:", err);
             } finally {
                 if (!cancelled) setLoading(false);
@@ -38,6 +43,7 @@ export default function PlayerHistory({ playerAddress, onBack }: {
     }, [playerAddress]);
 
     if (loading) return <div className="spinner">Loading history...</div>;
+    if (error) return <div className="empty" role="alert">{error}</div>;
     if (!data) return <div className="empty">No game history found for this player.</div>;
 
     const winRate = data.totalGames > 0

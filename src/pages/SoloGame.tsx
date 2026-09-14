@@ -4,7 +4,7 @@ import type { Move, Round, GameData, PlayerData, RoundResult } from "../types.ts
 import {
     determineWinner, pointsForResult, randomMove,
     uploadToBulletin, ensureMapping, getContract, withTimeout,
-    IPFS_GATEWAY, asBytes20,
+    readPlayerData, asBytes20,
 } from "../utils.ts";
 
 const MOVE_EMOJI: Record<Move, string> = { rock: "✊", paper: "✋", scissors: "✂️" };
@@ -65,13 +65,8 @@ export default function SoloGame({ account, onDone }: {
                 games: [],
             };
 
-            try {
-                const cidRes = await lb.getPlayerCid.query(asBytes20(account));
-                if (cidRes.success && cidRes.value) {
-                    const resp = await fetch(IPFS_GATEWAY + cidRes.value);
-                    if (resp.ok) playerData = await resp.json();
-                }
-            } catch { /* first time */ }
+            const existing = await readPlayerData(() => lb.getPlayerCid.query(asBytes20(account)));
+            if (existing) playerData = existing;
 
             const game: GameData = {
                 id: playerData.games.length + 1,
